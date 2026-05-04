@@ -468,7 +468,7 @@ function train_dqn!(mdp; n_episodes=100_000, batch_size=256, capacity=500_000, Î
     opt_state  = Flux.setup(Adam(5e-5), q_net)
     buffer     = ReplayBuffer(capacity)
 
-    target_update_freq = 50  0
+    target_update_freq = 500
     global_step = 0
     returns     = Float64[]
     shoe        = Shoe(NUM_DECKS)
@@ -595,7 +595,7 @@ end
 ############################
 # EVALUATION
 ############################
-function evaluate_dqn(mdp, trained_q_net; n_episodes=10_000)
+function evaluate_dqn(mdp, trained_q_net; n_episodes=10_0000)
     returns = Float64[]
     shoe    = Shoe(NUM_DECKS)
 
@@ -696,7 +696,7 @@ println("Baseline Mean Return: ", round(mean(baseline_scores), digits=4))
 println("Baseline Std Error:   ", round(std(baseline_scores) / sqrt(length(baseline_scores)), digits=4))
 
 println("\nTraining DQN on 6-deck shoe with Hi-Lo state...")
-trained_model, train_history = train_dqn!(m_sixdeck, n_episodes=100_000)
+# trained_model, train_history = train_dqn!(m_sixdeck, n_episodes=100_000)
 
 println("\nEvaluating DQN...")
 dqn_scores = evaluate_dqn(m_sixdeck, trained_model)
@@ -715,3 +715,164 @@ println("="^40)
 
 p = plot_learning_curve(train_history, window=1000)
 display(p)
+
+
+
+function plot_dqn_policy_heatmap(q_net; tc=0.0f0)
+    hard_rows = 8:17
+    dealer_cols = [2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
+    dealer_labels = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "A"]
+    hard_labels = [string(x) for x in hard_rows]
+
+    soft_rows = 13:21
+    soft_labels = ["A+2", "A+3", "A+4", "A+5", "A+6", "A+7", "A+8", "A+9", "A+10"]
+
+    action_labels = ["H", "ST", "D", "SP"]
+
+    # 4 colors: Hit=green, Stick=red, Double=yellow, Split=blue
+    action_colors = cgrad([
+        RGB(0.2, 0.7, 0.2),   # 1 = Hit
+        RGB(0.9, 0.2, 0.2),   # 2 = Stick
+        RGB(0.9, 0.85, 0.1),  # 3 = Double
+        RGB(0.2, 0.5, 0.9)    # 4 = Split
+    ], 4, categorical=true)
+
+    # --- Hard totals (no usable ace, no double/split available mid-hand) ---
+    hard_grid = zeros(Int, length(hard_rows), length(dealer_cols))
+    for (ri, psum) in enumerate(hard_rows)
+        for (ci, dc) in enumerate(dealer_cols)
+            s_vec = Float32.([psum/21.0, dc/10.0, 0.0, 0.0, 0.0, clamp(tc/10.0, -1.0, 1.0)])
+            q_vals = q_net(s_vec)
+            masked = copy(q_vals)
+            masked[3] = -Inf32  # no double
+            masked[4] = -Inf32  # no split
+            hard_grid[ri, ci] = argmax(masked)
+        end
+    end
+
+    # --- Hard totals with double available (first action) ---
+    hard_double_grid = zeros(Int, length(hard_rows), length(dealer_cols))
+    for (ri, psum) in enumerate(hard_rows)
+        for (ci, dc) in enumerate(dealer_cols)
+            s_vec = Float32.([psum/21.0, dc/10.0, 0.0, 1.0, 0.0, clamp(tc/10.0, -1.0, 1.0)])
+            q_vals = q_net(s_vec)
+            masked = copy(q_vals)
+            masked[4] = -Inf32  # no split
+            hard_double_grid[ri, ci] = argmax(masked)
+        end
+    end
+
+    # --- Soft totals (usable ace, no double/split) ---
+    soft_grid = zeros(Int, length(soft_rows), length(dealer_cols))
+    for (ri, psum) in enumerate(soft_rows)
+        for (ci, dc) in enumerate(dealer_cols)
+            s_vec = Float32.([psum/21.0, dc/10.0, 1.0, 0.0, 0.0, clamp(tc/10.0, -1.0, 1.0)])
+            q_vals = q_net(s_vec)
+            masked = copy(q_vals)
+            masked[3] = -Inf32
+            masked[4] = -Inf32
+            soft_grid[ri, ci] = argmax(masked)
+        end
+    end
+
+    # --- Soft totals with double available ---
+    soft_double_grid = zeros(Int, length(soft_rows), length(dealer_cols))
+    for (ri, psum) in enumerate(soft_rows)
+        for (ci, dc) in enumerate(dealer_cols)
+            s_vec = Float32.([psum/21.0, dc/10.0, 1.0, 1.0, 0.0, clamp(tc/10.0, -1.0, 1.0)])
+            q_vals = q_net(s_vec)
+            masked = copy(q_vals)
+            masked[4] = -Inf32  # no split
+            soft_double_grid[ri, ci] = argmax(masked)
+        end
+    end
+
+    # --- Pairs (split available) ---
+    pair_values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    pair_labels = ["A,A", "2,2", "3,3", "4,4", "5,5", "6,6", "7,7", "8,8", "9,9", "10,10"]
+    pair_grid = zeros(Int, length(pair_values), length(dealer_cols))
+    for (ri, pv) in enumerate(pair_values)
+        for (ci, dc) in enumerate(dealer_cols)
+            # Compute pair sum
+            if pv == 1
+                psum = 12  # A+A = 11+1 = 12 with usable ace
+                usable = 1.0
+            else
+                psum = pv * 2
+                usable = 0.0
+            end
+            s_vec = Float32.([psum/21.0, dc/10.0, usable, 1.0, 1.0, clamp(tc/10.0, -1.0, 1.0)])
+            q_vals = q_net(s_vec)
+            pair_grid[ri, ci] = argmax(q_vals)  # all 4 actions available
+        end
+    end
+
+    # Text color helper â€” dark text on yellow, white on everything else
+    function txt_color(action_idx)
+        return action_idx == 3 ? :black : :white
+    end
+
+    # --- Plot 1: Hard totals (first action, double available) ---
+    p1 = heatmap(
+        dealer_labels, hard_labels, hard_double_grid,
+        color=action_colors, clims=(1, 4),
+        xlabel="Dealer Upcard", ylabel="Player Sum",
+        title="Hard Totals (First Action)",
+        yflip=true, aspect_ratio=:equal, colorbar=false
+    )
+    for (ri, rl) in enumerate(hard_labels)
+        for (ci, cl) in enumerate(dealer_labels)
+            a = hard_double_grid[ri, ci]
+            annotate!(p1, cl, rl, text(action_labels[a], txt_color(a), :center, 7))
+        end
+    end
+
+    # --- Plot 2: Soft totals (first action, double available) ---
+    p2 = heatmap(
+        dealer_labels, soft_labels, soft_double_grid,
+        color=action_colors, clims=(1, 4),
+        xlabel="Dealer Upcard", ylabel="Player Hand",
+        title="Soft Totals (First Action)",
+        yflip=true, aspect_ratio=:equal, colorbar=false
+    )
+    for (ri, rl) in enumerate(soft_labels)
+        for (ci, cl) in enumerate(dealer_labels)
+            a = soft_double_grid[ri, ci]
+            annotate!(p2, cl, rl, text(action_labels[a], txt_color(a), :center, 7))
+        end
+    end
+
+    # --- Plot 3: Pairs ---
+    p3 = heatmap(
+        dealer_labels, pair_labels, pair_grid,
+        color=action_colors, clims=(1, 4),
+        xlabel="Dealer Upcard", ylabel="Player Hand",
+        title="Pairs (Split Available)",
+        yflip=true, aspect_ratio=:equal, colorbar=false
+    )
+    for (ri, rl) in enumerate(pair_labels)
+        for (ci, cl) in enumerate(dealer_labels)
+            a = pair_grid[ri, ci]
+            annotate!(p3, cl, rl, text(action_labels[a], txt_color(a), :center, 7))
+        end
+    end
+
+    p = plot(p1, p2, p3, layout=(3, 1), size=(600, 1100),
+             plot_title="DQN Policy (True Count = $(tc))")
+    return p
+end
+
+# Plot at neutral count
+p_dqn = plot_dqn_policy_heatmap(trained_model, tc=0.0f0)
+display(p_dqn)
+savefig(p_dqn, "dqn_policy_heatmap_tc0.png")
+
+# Plot at high count to see how strategy shifts
+p_dqn_high = plot_dqn_policy_heatmap(trained_model, tc=4.0f0)
+display(p_dqn_high)
+savefig(p_dqn_high, "dqn_policy_heatmap_tc4.png")
+
+# Plot at low count
+p_dqn_low = plot_dqn_policy_heatmap(trained_model, tc=-4.0f0)
+display(p_dqn_low)
+savefig(p_dqn_low, "dqn_policy_heatmap_tc_neg4.png")

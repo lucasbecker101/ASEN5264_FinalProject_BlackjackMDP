@@ -475,7 +475,7 @@ function qlearning!(mdp; n_episodes=10000, α=0.2, eval_every=500)
         cumulative_steps += steps
 
         if i % eval_every == 0
-            mean_return = mean(evaluate(mdp, Q, n_episodes=100  00))
+            mean_return = mean(evaluate(mdp, Q, n_episodes=1000))
             push!(curve_xs, cumulative_steps)
             push!(curve_ys, mean_return)
 
@@ -560,3 +560,75 @@ println("Q-Learning:")
 println("  Mean Return: ", round(mean_q,        digits=4))
 println("  Std Error:   ", round(se_q,          digits=4))
 println("="^40)
+
+
+function plot_policy_heatmap(Q)
+    hard_rows = 8:17
+    dealer_cols = [2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
+    dealer_labels = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "A"]
+    hard_labels = [string(x) for x in hard_rows]
+
+    hard_grid = zeros(Int, length(hard_rows), length(dealer_cols))
+    for (ri, psum) in enumerate(hard_rows)
+        for (ci, dc) in enumerate(dealer_cols)
+            key = (psum, dc, false)
+            q_hit   = get(Q, (key, :hit), 0.0)
+            q_stick = get(Q, (key, :stick), 0.0)
+            hard_grid[ri, ci] = q_hit > q_stick ? 1 : 2
+        end
+    end
+
+    soft_rows = 13:21
+    soft_labels = ["A+2", "A+3", "A+4", "A+5", "A+6", "A+7", "A+8", "A+9", "A+10"]
+    soft_grid = zeros(Int, length(soft_rows), length(dealer_cols))
+    for (ri, psum) in enumerate(soft_rows)
+        for (ci, dc) in enumerate(dealer_cols)
+            key = (psum, dc, true)
+            q_hit   = get(Q, (key, :hit), 0.0)
+            q_stick = get(Q, (key, :stick), 0.0)
+            soft_grid[ri, ci] = q_hit > q_stick ? 1 : 2
+        end
+    end
+
+    action_colors = cgrad([RGB(0.2, 0.7, 0.2), RGB(0.9, 0.2, 0.2)], 2, categorical=true)
+
+    # Hard totals
+    p1 = heatmap(
+        dealer_labels, hard_labels, hard_grid,
+        color=action_colors, clims=(1, 2),
+        xlabel="Dealer Upcard", ylabel="Player Sum",
+        title="Hard Totals",
+        yflip=true, aspect_ratio=:equal, colorbar=false
+    )
+    for (ri, rl) in enumerate(hard_labels)
+        for (ci, cl) in enumerate(dealer_labels)
+            label = hard_grid[ri, ci] == 1 ? "H" : "ST"
+            annotate!(p1, cl, rl, text(label, :white, :center, 7))
+        end
+    end
+
+    # Soft totals
+    p2 = heatmap(
+        dealer_labels, soft_labels, soft_grid,
+        color=action_colors, clims=(1, 2),
+        xlabel="Dealer Upcard", ylabel="Player Hand",
+        title="Soft Totals",
+        yflip=true, aspect_ratio=:equal, colorbar=false
+    )
+    for (ri, rl) in enumerate(soft_labels)
+        for (ci, cl) in enumerate(dealer_labels)
+            label = soft_grid[ri, ci] == 1 ? "H" : "ST"
+            annotate!(p2, cl, rl, text(label, :white, :center, 7))
+        end
+    end
+
+    p = plot(p1, p2, layout=(2, 1), size=(600, 800),
+             plot_title="Learned Q-Learning Policy vs Dealer Upcard")
+    return p
+end
+
+# Usage:
+p_policy = plot_policy_heatmap(final_Q)
+display(p_policy)
+savefig(p_policy, "figures/q_learning_policy_heatmap.png")
+
